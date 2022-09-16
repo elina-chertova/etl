@@ -1,19 +1,20 @@
-from etl_classes import DataTransform
-from etl_classes import PostgresExtractor
-from config import database, sql_query
-from etl_classes import ElasticsearchLoader
-from etl_classes import ElasticsearchPreparation
-from config import settings
-from dotenv import load_dotenv
 import os
+import time
+from config import settings, sql_query
+from dotenv import load_dotenv
+from etl_classes import (DataTransform, ElasticsearchLoader,
+                         ElasticsearchPreparation, PostgresExtractor)
 
 load_dotenv()
 
+BATCH_SIZE = 25
+INDEX_NAME = 'movies'
 
-if __name__ == '__main__':
+
+def etl():
     cl = ElasticsearchPreparation()
-    index_name = 'movies'
-    postgr = PostgresExtractor(database, sql_query, 25)
+    index_name = INDEX_NAME
+    postgr = PostgresExtractor(sql_query, BATCH_SIZE)
 
     el = ElasticsearchLoader(os.environ.get('ES_URL'), index_name)
     cl.create_index(index_name=index_name, settings=settings)
@@ -24,3 +25,10 @@ if __name__ == '__main__':
             res = transf.get_elasticsearch_type(row)
             el.upload_to_elasticsearch(res)
     pc.close()
+
+
+if __name__ == '__main__':
+    while True:
+        etl()
+        time.sleep(10)
+

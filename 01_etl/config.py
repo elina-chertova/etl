@@ -1,14 +1,16 @@
-import os
-from dotenv import load_dotenv
+import logging
+from pydantic import BaseSettings
 
-load_dotenv()
+logging.basicConfig(filename="elastic.log", level=logging.DEBUG, format='%(asctime)s %(levelname)s:%(message)s')
+logger = logging.getLogger('log')
 
-database = {'dbname': os.environ.get('DB_NAME'),
-            'user': os.environ.get('DB_USER'),
-            'password': os.environ.get('DB_PASSWORD'),
-            'host': os.environ.get('DB_HOST', '127.0.0.1'),
-            'port': os.environ.get('DB_PORT', 5432)
-            }
+
+class Database(BaseSettings):
+    psql_dbname: str = "movies_db"
+    psql_user: str = "app"
+    psql_password: str = "123qwe"
+    psql_host: str = "127.0.0.1"
+    psql_port: str = "5432"
 
 
 sql_query = '''SELECT
@@ -147,3 +149,4 @@ settings = {
     }
   }
 }
+

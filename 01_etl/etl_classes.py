@@ -1,21 +1,22 @@
-import uuid
 import datetime
+import json
+import os
+import uuid
 from dataclasses import dataclass
+from typing import Dict, List
+
+import elasticsearch
 import psycopg2
 import psycopg2.extras
 import requests
-import logging
-from elasticsearch import Elasticsearch
-from state import JsonFileStorage, State
 from backoff_ import backoff
-import os
-import json
-from psycopg2 import sql
+from config import Database, logger
 from dotenv import load_dotenv
-from typing import Dict
-load_dotenv()
+from elasticsearch import Elasticsearch
+from psycopg2 import sql
+from state import JsonFileStorage, State
 
-logging.basicConfig(filename="elastic.log", level=logging.DEBUG, format='%(asctime)s %(levelname)s:%(message)s')
+load_dotenv()
 
 
 class ElasticsearchPreparation:
@@ -23,34 +24,40 @@ class ElasticsearchPreparation:
         self.client = Elasticsearch(
             "http://{0}:{1}".format(os.environ.get('ES_HOST'), os.environ.get('ES_PORT')),
         )
-        logging.info(self.client.ping())
+        logger.info(self.client.ping())
 
-    @backoff()
+    @backoff(logger)
     def create_index(self, index_name: str, settings: Dict) -> bool:
         """Создать индекс для Elasticsearch"""
         created = False
         try:
             if not self.client.indices.exists(index_name):
-                logging.info("Creating index {0} with schema {1}".format(index_name, settings))
+                logger.info("Creating index {0} with schema {1}".format(index_name, settings))
                 self.client.indices.create(index=index_name, ignore=400, body=settings)
             created = True
-        except Exception as ex:
-            logging.error(str(ex))
+        except elasticsearch.exceptions.ConnectionError as ex:
+
+            logger.error(str(ex))
         finally:
             return created
 
 
-@backoff()
-def postgres_connection(db_sttngs):
-    return psycopg2.connect(**db_sttngs)
+@backoff(logger)
+def postgres_connection(database):
+    setting = {'dbname': database.psql_dbname,
+               'user': database.psql_user,
+               'password': database.psql_password,
+               'host': database.psql_host,
+               'port': int(database.psql_port)}
+    return psycopg2.connect(**setting)
 
 
 class PostgresExtractor:
-    def __init__(self, db_sttngs: dict, query: str, batch_size: int):
+    def __init__(self, query: str, batch_size: int):
         self.query = query
-        self.db_sttngs = db_sttngs
+        self.database = Database()
         self.batch_size = batch_size
-        self.conn = postgres_connection(self.db_sttngs)
+        self.conn = postgres_connection(self.database)
 
     def get_state(self):
         storage = JsonFileStorage("state.json")
@@ -59,14 +66,10 @@ class PostgresExtractor:
 
     def extract_data(self):
         """Генератор пачек данных"""
-        conn = postgres_connection(self.db_sttngs)
+        conn = postgres_connection(self.database)
         with conn.cursor() as curs:
             curs.execute(sql.SQL(self.query), self.get_state())
-
-            while True:
-                rows = curs.fetchmany(self.batch_size)
-                if not rows:
-                    break
+            while rows := curs.fetchmany(self.batch_size):
                 yield rows
 
 
@@ -87,7 +90,7 @@ class DataTransform:
     def __init__(self, index_name: str):
         self.index_name = index_name
 
-    def get_elasticsearch_type(self, rows):
+    def get_elasticsearch_type(self, rows: List[tuple]) -> List[dict]:
         """Метод для возврата типа подходящего для ElasticSearch"""
         result = []
         for row in rows:
@@ -114,7 +117,7 @@ class DataTransform:
         return result
 
 
-def bulk(rows: list, index_name: str):
+def bulk(rows: List[dict], index_name: str) -> List[str]:
     """Создание запроса для закачивания данных в ElasticSearch"""
     query = []
     for row in rows:
@@ -132,18 +135,21 @@ class ElasticsearchLoader:
         state = State(storage)
         state.set_state("modified", datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
 
-    @backoff()
-    def upload_to_elasticsearch(self, rows: list):
+    @backoff(logger)
+    def upload_to_elasticsearch(self, rows: list) -> None:
         """Закачивание данных в ElasticSearch через посыл запроса"""
         query = bulk(rows, self.index_name)
+
         response = requests.post(
             self.url + '_bulk',
             data='\n'.join(query) + '\n',
             headers={'Content-Type': 'application/x-ndjson'}
         )
-        logging.info(response.text)
+        logger.info(response.text)
         if response.status_code == 200:
             self.set_state()
+
+
 
 
 
