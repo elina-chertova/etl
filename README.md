@@ -1,5 +1,5 @@
 # ETL
 
-Загрузка данных из Elasticsearch в Postgres.
+Загрузка данных из Postgres в Elasticsearch.
 
 
